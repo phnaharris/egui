@@ -94,11 +94,14 @@ pub struct State {
 
     /// track ime state
     input_method_editor_started: bool,
+    text_input_last_frame: bool,
 
     #[cfg(feature = "accesskit")]
     accesskit: Option<accesskit_winit::Adapter>,
 
     allow_ime: bool,
+
+    surrounding_text: Option<(String, (usize, usize))>,
 }
 
 impl State {
@@ -133,12 +136,14 @@ impl State {
             simulate_touch_screen: false,
             pointer_touch_id: None,
 
+            text_input_last_frame: false,
             input_method_editor_started: false,
 
             #[cfg(feature = "accesskit")]
             accesskit: None,
 
             allow_ime: false,
+            surrounding_text: None,
         };
 
         slf.egui_input
@@ -339,11 +344,15 @@ impl State {
                 // between Commits.
                 match ime {
                     winit::event::Ime::Enabled | winit::event::Ime::Disabled => (),
-                    winit::event::Ime::Commit(text) => {
+                    winit::event::Ime::Commit {
+                        content,
+                        selection,
+                        compose_region,
+                    } => {
                         self.input_method_editor_started = false;
                         self.egui_input
                             .events
-                            .push(egui::Event::CompositionEnd(text.clone()));
+                            .push(egui::Event::CompositionEnd(content.clone()));
                     }
                     winit::event::Ime::Preedit(text, Some(_)) => {
                         if !self.input_method_editor_started {
@@ -353,6 +362,22 @@ impl State {
                         self.egui_input
                             .events
                             .push(egui::Event::CompositionUpdate(text.clone()));
+                    }
+                    winit::event::Ime::RetrieveSurroundingText => {
+                        // let surr = self.surr
+                        // window.set_ime_surrounding_text(text, selection)
+                    }
+                    winit::event::Ime::DeleteSurroundingText {
+                        before_length,
+                        after_length,
+                    } => {
+                        self.egui_input
+                            .events
+                            .push(egui::Event::CompositionReplace {
+                                content: "".to_string(),
+                                selection: (*before_length, *after_length),
+                                compose_region: None,
+                            });
                     }
                     winit::event::Ime::Preedit(_, None) => {}
                 };
@@ -797,9 +822,11 @@ impl State {
             copied_text,
             events: _,                    // handled elsewhere
             mutable_text_under_cursor: _, // only used in eframe web
+            text_cursor_pos,
             ime,
             #[cfg(feature = "accesskit")]
             accesskit_update,
+            surrounding_text,
         } = platform_output;
 
         self.set_cursor_icon(window, cursor_icon);
@@ -812,6 +839,12 @@ impl State {
             self.clipboard.set(copied_text);
         }
 
+        let text_input_this_frame = text_cursor_pos.is_some();
+        if self.text_input_last_frame != text_input_this_frame {
+            window.set_ime_allowed(text_input_this_frame);
+        }
+
+        self.text_input_last_frame = text_input_this_frame;
         let allow_ime = ime.is_some();
         if self.allow_ime != allow_ime {
             self.allow_ime = allow_ime;
@@ -833,6 +866,12 @@ impl State {
                     height: pixels_per_point * rect.height(),
                 },
             );
+            if let Some((text, selection)) = surrounding_text.clone() {
+                if self.surrounding_text != surrounding_text && !text.is_empty() {
+                    self.surrounding_text = surrounding_text;
+                    window.set_ime_surrounding_text(text, selection);
+                }
+            }
         }
 
         #[cfg(feature = "accesskit")]

@@ -570,6 +570,18 @@ impl<'t> TextEdit<'t> {
             ui.ctx().set_cursor_icon(CursorIcon::Text);
         }
 
+        // Update the InputState if we're interacting (E.g. updating seleciton or cursor position)
+        if interactive
+            && state.soft_keyboard_visible
+            && (response.drag_released() || response.clicked())
+        {
+            update_text_input(
+                ui.ctx(),
+                state.cursor_range(&galley),
+                text.as_str().to_owned(),
+            );
+        }
+
         let mut cursor_range = None;
         let prev_cursor_range = state.cursor.range(&galley);
         if interactive && ui.memory(|mem| mem.has_focus(id)) {
@@ -644,7 +656,15 @@ impl<'t> TextEdit<'t> {
             false
         };
 
-        if ui.is_rect_visible(rect) {
+        if ui.memory(|memory| memory.lost_focus(id)) {
+            state.soft_keyboard_visible = false;
+        }
+
+        if ui.memory(|mem| mem.has_focus(id)) && ui.input(|i| i.screen_rect_changed()) {
+            ui.scroll_to_rect(rect, None);
+        }
+
+        if ui.is_rect_visible(rect) || ui.memory(|mem| mem.has_focus(id)) {
             painter.galley(galley_pos, galley.clone(), text_color);
 
             if text.as_str().is_empty() && !hint_text.is_empty() {
@@ -683,6 +703,16 @@ impl<'t> TextEdit<'t> {
                         paint_cursor(&painter, ui.visuals(), primary_cursor_rect);
 
                         if interactive {
+                            // Send the text input only when the keyboard is initially shown.
+                            update_text_input(
+                                ui.ctx(),
+                                state.cursor_range(&galley),
+                                text.as_str().to_owned(),
+                            );
+                            if !state.soft_keyboard_visible {
+                                state.soft_keyboard_visible = true;
+                            }
+
                             // For IME, so only set it when text is editable and visible!
                             ui.ctx().output_mut(|o| {
                                 o.ime = Some(crate::output::IMEOutput {
@@ -927,11 +957,13 @@ fn events(
             } => check_for_mutating_key_press(os, &mut cursor_range, text, galley, modifiers, *key),
 
             Event::CompositionStart => {
+                println!("egui: CompositionStart");
                 state.has_ime = true;
                 None
             }
 
             Event::CompositionUpdate(text_mark) => {
+                println!("egui: CompositionUpdate with {:?}", text_mark);
                 // empty prediction can be produced when user press backspace
                 // or escape during ime. We should clear current text.
                 if text_mark != "\n" && text_mark != "\r" && state.has_ime {
@@ -947,6 +979,7 @@ fn events(
             }
 
             Event::CompositionEnd(prediction) => {
+                println!("egui: CompositionEnd with result {:?}", prediction);
                 // CompositionEnd only characters may be typed into TextEdit without trigger CompositionStart first, so do not check `state.has_ime = true` in the following statement.
                 if prediction != "\n" && prediction != "\r" {
                     state.has_ime = false;
@@ -957,6 +990,24 @@ fn events(
                     Some(CCursorRange::one(ccursor))
                 } else {
                     None
+                }
+            }
+
+            Event::CompositionReplace {
+                content,
+                selection,
+                compose_region,
+            } => {
+                text.replace_with(content);
+
+                if let Some((start, end)) = compose_region {
+                    let ccursor = CCursorRange::two(CCursor::new(*start), CCursor::new(*end));
+                    Some(ccursor)
+                } else {
+                    Some(CCursorRange::two(
+                        CCursor::new(selection.0),
+                        CCursor::new(selection.1),
+                    ))
                 }
             }
 
@@ -988,6 +1039,21 @@ fn events(
 }
 
 // ----------------------------------------------------------------------------
+
+fn update_text_input(ctx: &Context, cursor_range: Option<CursorRange>, text: String) {
+    ctx.output_mut(|o| {
+        let selection = if let Some(cursor_range) = cursor_range {
+            (
+                cursor_range.primary.ccursor.index,
+                cursor_range.secondary.ccursor.index,
+            )
+        } else {
+            (0, 0)
+        };
+
+        o.surrounding_text = Some((text, selection))
+    });
+}
 
 /// Returns `Some(new_cursor)` if we did mutate `text`.
 fn check_for_mutating_key_press(

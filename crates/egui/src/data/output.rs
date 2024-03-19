@@ -118,6 +118,12 @@ pub struct PlatformOutput {
     /// Useful for IME.
     pub ime: Option<IMEOutput>,
 
+    /// Screen-space position of text edit cursor (used for IME).
+    pub text_cursor_pos: Option<crate::Pos2>,
+
+    /// Set surrounding text and current selection of the current text input (used for IME).
+    pub surrounding_text: Option<(String, (usize, usize))>,
+
     /// The difference in the widget tree since last frame.
     ///
     /// NOTE: this needs to be per-viewport.
@@ -155,6 +161,8 @@ impl PlatformOutput {
             ime,
             #[cfg(feature = "accesskit")]
             accesskit_update,
+            text_cursor_pos,
+            surrounding_text,
         } = newer;
 
         self.cursor_icon = cursor_icon;
@@ -167,6 +175,10 @@ impl PlatformOutput {
         self.events.append(&mut events);
         self.mutable_text_under_cursor = mutable_text_under_cursor;
         self.ime = ime.or(self.ime);
+
+        if surrounding_text.is_some() {
+            self.surrounding_text = surrounding_text;
+        }
 
         #[cfg(feature = "accesskit")]
         {
